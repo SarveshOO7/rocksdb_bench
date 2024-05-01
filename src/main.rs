@@ -4,7 +4,7 @@ fn main() {
 
 use rand::distributions::Bernoulli;
 use rand::{distributions::Distribution, Rng};
-use rocksdb::{DBPath, DB};
+use rocksdb::{DBPath, DBWithThreadMode, MultiThreaded, DB};
 use std::sync::Arc;
 use std::{
     ops::{Deref, DerefMut},
@@ -12,6 +12,8 @@ use std::{
     thread,
 };
 use tracing::trace;
+
+use tokio::task::LocalSet;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -37,8 +39,18 @@ fn bench() {
 
     let zeros: [u8; 4096] = [0; 4096];
 
-    let db = DB::open_default("_rust_rocksdb_multithreadtest").unwrap();
+    let db =
+        DBWithThreadMode::<MultiThreaded>::open_default("_rust_rocksdb_multithreadtest").unwrap();
     let db = Arc::new(db);
+
+    // Spawn all threads
+    for id in 0..DISK_PAGES {
+        let key: [u8; 8] = id.to_le_bytes();
+        let _ = db.put(key, zeros);
+        println!("id {}", id);
+    }
+
+    println!("Added all the pages");
 
     // Spawn all threads
     thread::scope(|s| {
@@ -64,8 +76,10 @@ fn bench() {
 
         s.spawn(|| {
             let duration = std::time::Duration::from_secs(1);
+            let mut prev = 0;
             while COUNTER.load(Ordering::SeqCst) < THREADS * TASKS * ITERATIONS {
-                println!("Counter is at: {:?}", COUNTER);
+                println!("Counter is at: {:?}", COUNTER.load(Ordering::SeqCst) - prev);
+                prev = COUNTER.load(Ordering::SeqCst);
                 std::thread::sleep(duration);
             }
         });
